@@ -6,7 +6,7 @@
 
 ## Возможности
 
-- получение `VEngineClient013`, `VClient017`, `VClientEntityList003`, `VGUI_Surface030` и `VGUI_Panel009` через экспорт `CreateInterface`;
+- поиск экспорта `CreateInterface` во всех загруженных модулях ClientMod и получение `VEngineClient013`, `VClient017`, `VClientEntityList003`, `VGUI_Surface030` и `VGUI_Panel009`;
 - чтение локального игрока, списка сущностей и полей игровых объектов;
 - перспективная проекция `WorldToScreen` через матрицу вида-проекции;
 - VMT-хук `IPanel::PaintTraverse` (индекс `41`);
@@ -92,7 +92,7 @@ cmake --build build-clean --config Release
 
 ### Поток данных
 
-1. `CreateInterface` возвращает указатели на интерфейсы движка.
+1. DLL перечисляет модули текущего `CMLauncher.exe`, находит экспорт `CreateInterface` и определяет владельца каждого интерфейса без зависимости от старых имён `engine.dll`/`client.dll`.
 2. `IClientEntityList` перечисляет сущности игроков.
 3. Из каждой активной сущности читаются позиция, здоровье и номер команды.
 4. `Matrix4x4::TransformPoint` переводит мировую точку в clip space.

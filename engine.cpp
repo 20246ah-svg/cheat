@@ -5,6 +5,7 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#include <TlHelp32.h>
 
 #include "engine.h"
 
@@ -24,21 +25,64 @@ std::uintptr_t engine_base = 0;
 namespace {
 using CreateInterfaceFn = void*(__cdecl*)(const char*, int*);
 
-char g_initialization_status[512] = "Initialization has not started.";
+char g_initialization_status[768] = "Initialization has not started.";
+char g_engine_owner[MAX_PATH] = "not found";
+char g_client_owner[MAX_PATH] = "not found";
+char g_surface_owner[MAX_PATH] = "not found";
+char g_panel_owner[MAX_PATH] = "not found";
 
 template <typename Interface>
-[[nodiscard]] Interface* CaptureInterface(HMODULE module, const char* name) noexcept {
-    if (module == nullptr) {
-        return nullptr;
+struct InterfaceCapture {
+    Interface* instance = nullptr;
+    HMODULE owner = nullptr;
+};
+
+template <std::size_t Size>
+void StoreModuleName(HMODULE module, char (&destination)[Size]) noexcept {
+    char path[MAX_PATH]{};
+    if (module == nullptr ||
+        GetModuleFileNameA(module, path, static_cast<DWORD>(sizeof(path))) == 0) {
+        std::snprintf(destination, Size, "%s", "unknown");
+        return;
     }
 
-    const auto factory = reinterpret_cast<CreateInterfaceFn>(
-        GetProcAddress(module, "CreateInterface"));
-    if (factory == nullptr) {
-        return nullptr;
+    const char* name = std::strrchr(path, '\\');
+    name = name == nullptr ? path : name + 1;
+    std::snprintf(destination, Size, "%s", name);
+}
+
+template <typename Interface>
+[[nodiscard]] InterfaceCapture<Interface> CaptureFromLoadedModules(
+    const char* interface_name) noexcept {
+    InterfaceCapture<Interface> result{};
+    HANDLE const snapshot = CreateToolhelp32Snapshot(
+        TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetCurrentProcessId());
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return result;
     }
 
-    return static_cast<Interface*>(factory(name, nullptr));
+    MODULEENTRY32 module_entry{};
+    module_entry.dwSize = sizeof(module_entry);
+    if (Module32First(snapshot, &module_entry)) {
+        do {
+            const auto factory = reinterpret_cast<CreateInterfaceFn>(
+                GetProcAddress(module_entry.hModule, "CreateInterface"));
+            if (factory == nullptr) {
+                continue;
+            }
+
+            Interface* const instance =
+                static_cast<Interface*>(factory(interface_name, nullptr));
+            if (instance != nullptr) {
+                result.instance = instance;
+                result.owner = module_entry.hModule;
+                break;
+            }
+        } while (Module32Next(snapshot, &module_entry));
+    }
+
+    CloseHandle(snapshot);
+    return result;
 }
 
 void ResetStatus(const char* text) noexcept {
@@ -60,36 +104,21 @@ void AppendStatus(const char* text) noexcept {
                   text);
 }
 
-void UpdateModuleStatus(HMODULE engine_module,
-                        HMODULE client_module,
-                        HMODULE vgui2_module,
-                        HMODULE surface_module) noexcept {
-    ResetStatus("Waiting for modules:");
-    if (engine_module == nullptr) {
-        AppendStatus("engine.dll");
-    }
-    if (client_module == nullptr) {
-        AppendStatus("client.dll");
-    }
-    if (vgui2_module == nullptr) {
-        AppendStatus("vgui2.dll");
-    }
-    if (surface_module == nullptr) {
-        AppendStatus("vguimatsurface.dll");
-    }
-}
-
 void UpdateInterfaceStatus() noexcept {
     if (IsReady()) {
-        if (client == nullptr) {
-            ResetStatus("ESP interfaces are ready. Optional VClient017 is missing.");
-        } else {
-            ResetStatus("All ClientMod interfaces are ready.");
-        }
+        std::snprintf(
+            g_initialization_status,
+            sizeof(g_initialization_status),
+            "Interfaces ready. engine=%s; entities=%s; surface=%s; panel=%s.%s",
+            g_engine_owner,
+            g_client_owner,
+            g_surface_owner,
+            g_panel_owner,
+            client == nullptr ? " Optional VClient017 is missing." : "");
         return;
     }
 
-    ResetStatus("Missing interfaces:");
+    ResetStatus("Missing interfaces after scanning every loaded module:");
     if (client_engine == nullptr) {
         AppendStatus("VEngineClient013");
     }
@@ -109,38 +138,58 @@ void UpdateInterfaceStatus() noexcept {
 } // namespace
 
 bool Initialize() noexcept {
-    const HMODULE engine_module = GetModuleHandleA("engine.dll");
-    const HMODULE client_module = GetModuleHandleA("client.dll");
-    const HMODULE vgui2_module = GetModuleHandleA("vgui2.dll");
-    const HMODULE surface_module = GetModuleHandleA("vguimatsurface.dll");
-
-    if (engine_module == nullptr || client_module == nullptr ||
-        vgui2_module == nullptr || surface_module == nullptr) {
-        UpdateModuleStatus(
-            engine_module, client_module, vgui2_module, surface_module);
-        return false;
-    }
-
-    engine_base = reinterpret_cast<std::uintptr_t>(engine_module);
-    client_base = reinterpret_cast<std::uintptr_t>(client_module);
-
+    // ClientMod runs several CMLauncher.exe processes and uses renamed modules
+    // such as clientmod_client.dll. Search every loaded module for the Source
+    // CreateInterface export instead of assuming engine.dll/client.dll names.
     if (client_engine == nullptr) {
-        client_engine =
-            CaptureInterface<IVEngineClient>(engine_module, "VEngineClient013");
+        const auto captured =
+            CaptureFromLoadedModules<IVEngineClient>("VEngineClient013");
+        client_engine = captured.instance;
+        if (captured.instance != nullptr) {
+            engine_base = reinterpret_cast<std::uintptr_t>(captured.owner);
+            StoreModuleName(captured.owner, g_engine_owner);
+        }
     }
+
     if (client == nullptr) {
-        client = CaptureInterface<IBaseClientDLL>(client_module, "VClient017");
+        const auto captured =
+            CaptureFromLoadedModules<IBaseClientDLL>("VClient017");
+        client = captured.instance;
+        if (captured.instance != nullptr) {
+            if (client_base == 0) {
+                client_base = reinterpret_cast<std::uintptr_t>(captured.owner);
+            }
+            StoreModuleName(captured.owner, g_client_owner);
+        }
     }
+
     if (entity_list == nullptr) {
-        entity_list = CaptureInterface<IClientEntityList>(
-            client_module, "VClientEntityList003");
+        const auto captured = CaptureFromLoadedModules<IClientEntityList>(
+            "VClientEntityList003");
+        entity_list = captured.instance;
+        if (captured.instance != nullptr) {
+            // The entity-list owner is the correct base for client offsets.
+            client_base = reinterpret_cast<std::uintptr_t>(captured.owner);
+            StoreModuleName(captured.owner, g_client_owner);
+        }
     }
+
     if (surface == nullptr) {
-        surface =
-            CaptureInterface<ISurface>(surface_module, "VGUI_Surface030");
+        const auto captured =
+            CaptureFromLoadedModules<ISurface>("VGUI_Surface030");
+        surface = captured.instance;
+        if (captured.instance != nullptr) {
+            StoreModuleName(captured.owner, g_surface_owner);
+        }
     }
+
     if (panel == nullptr) {
-        panel = CaptureInterface<IPanel>(vgui2_module, "VGUI_Panel009");
+        const auto captured =
+            CaptureFromLoadedModules<IPanel>("VGUI_Panel009");
+        panel = captured.instance;
+        if (captured.instance != nullptr) {
+            StoreModuleName(captured.owner, g_panel_owner);
+        }
     }
 
     UpdateInterfaceStatus();
