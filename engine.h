@@ -80,8 +80,11 @@ public:
 
 namespace Engine {
 namespace AddressOffsets {
-inline constexpr std::uintptr_t kLocalPlayer = 0x4D1D5C;
-inline constexpr std::uintptr_t kViewMatrix = 0x59A9B4;
+inline constexpr std::uintptr_t kLocalPlayer = 0x4C88EC;
+inline constexpr std::uintptr_t kEntityList = 0x4C5C1C;
+inline constexpr std::uintptr_t kViewMatrix = 0x4A3D64;
+inline constexpr std::uintptr_t kEnginePointer = 0x3C5C64;
+inline constexpr std::uintptr_t kEntityStride = 0x10;
 } // namespace AddressOffsets
 
 extern IVEngineClient* client_engine;
@@ -98,5 +101,6 @@ void Shutdown() noexcept;
 
 [[nodiscard]] bool IsReady() noexcept;
 [[nodiscard]] CBaseEntity* GetLocalPlayer() noexcept;
+[[nodiscard]] CBaseEntity* GetEntityByIndex(int index) noexcept;
 [[nodiscard]] const Matrix4x4* GetViewMatrix() noexcept;
 } // namespace Engine

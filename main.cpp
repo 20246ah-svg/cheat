@@ -19,7 +19,21 @@ DWORD WINAPI InitializeThread(void*) noexcept {
         Sleep(250);
     }
 
-    Hooks::Initialize();
+    const bool hook_installed = Hooks::Initialize();
+    OutputDebugStringA(hook_installed
+                           ? "[cheat] Interfaces acquired; PaintTraverse hook installed.\n"
+                           : "[cheat] PaintTraverse hook installation failed.\n");
+
+#if defined(CHEAT_DIAGNOSTICS)
+    MessageBoxA(nullptr,
+                hook_installed
+                    ? "Interfaces acquired and PaintTraverse hook installed.\n"
+                      "A red test square should now be visible."
+                    : "Interfaces were acquired, but the PaintTraverse hook failed.",
+                "cheat diagnostics",
+                MB_OK | (hook_installed ? MB_ICONINFORMATION : MB_ICONERROR));
+#endif
+
     return 0;
 }
 } // namespace
@@ -27,6 +41,15 @@ DWORD WINAPI InitializeThread(void*) noexcept {
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(instance);
+
+#if defined(CHEAT_DIAGNOSTICS)
+        // Deliberately synchronous for the requested load-life check. Disable
+        // CHEAT_DIAGNOSTICS after troubleshooting to avoid work under loader lock.
+        MessageBoxA(nullptr,
+                    "DLL loaded! Press OK to continue.",
+                    "cheat diagnostics",
+                    MB_OK | MB_ICONINFORMATION);
+#endif
 
         HANDLE const thread = CreateThread(
             nullptr, 0, &InitializeThread, nullptr, 0, nullptr);

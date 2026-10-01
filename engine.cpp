@@ -112,6 +112,25 @@ CBaseEntity* GetLocalPlayer() noexcept {
     return local_index > 0 ? entity_list->GetClientEntity(local_index) : nullptr;
 }
 
+CBaseEntity* GetEntityByIndex(int index) noexcept {
+    if (!IsReady() || index < 0 || index > 64) {
+        return nullptr;
+    }
+
+    // CreateInterface remains the preferred path. The module-relative entity
+    // list is kept as a fallback for ClientMod builds where the interface
+    // temporarily returns no entity during level transitions.
+    if (CBaseEntity* const entity = entity_list->GetClientEntity(index);
+        entity != nullptr) {
+        return entity;
+    }
+
+    const std::uintptr_t slot = client_base + AddressOffsets::kEntityList +
+                                static_cast<std::uintptr_t>(index) *
+                                    AddressOffsets::kEntityStride;
+    return *reinterpret_cast<CBaseEntity**>(slot);
+}
+
 const Matrix4x4* GetViewMatrix() noexcept {
     if (!IsReady()) {
         return nullptr;

@@ -128,7 +128,7 @@ void Render() noexcept {
         Engine::entity_list->GetHighestEntityIndex(), 0, kMaximumPlayerSlots);
 
     for (int index = 1; index <= highest_index; ++index) {
-        CBaseEntity* const entity = Engine::entity_list->GetClientEntity(index);
+        CBaseEntity* const entity = Engine::GetEntityByIndex(index);
         if (entity == nullptr || entity == local_player || entity->IsDormant()) {
             continue;
         }

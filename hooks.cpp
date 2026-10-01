@@ -119,13 +119,23 @@ void __fastcall HookedPaintTraverse(void* this_pointer,
     if (g_overlay_panel == 0 && Engine::panel != nullptr) {
         const char* const panel_name = Engine::panel->GetName(panel);
         if (panel_name != nullptr &&
-            std::strcmp(panel_name, kOverlayPanelName) == 0) {
+            std::strstr(panel_name, kOverlayPanelName) != nullptr) {
             g_overlay_panel = panel;
         }
     }
 
-    if (panel == g_overlay_panel &&
-        g_overlay_enabled.load(std::memory_order_relaxed)) {
+    if (panel != g_overlay_panel) {
+        return;
+    }
+
+#if defined(CHEAT_DIAGNOSTICS)
+    // This primitive is independent of entity offsets and ViewMatrix. If it is
+    // visible, PaintTraverse and the VGUI surface methods are working.
+    Engine::surface->DrawSetColor(255, 0, 0, 255);
+    Engine::surface->DrawFilledRect(400, 300, 500, 400);
+#endif
+
+    if (g_overlay_enabled.load(std::memory_order_relaxed)) {
         ESP::Render();
     }
 }
@@ -135,6 +145,9 @@ bool Initialize() noexcept {
     if (!Engine::IsReady()) {
         return false;
     }
+
+    // The overlay starts enabled; Insert is only an optional runtime toggle.
+    g_overlay_enabled.store(true, std::memory_order_relaxed);
 
     void** const panel_table = *reinterpret_cast<void***>(Engine::panel);
     if (panel_table == nullptr || panel_table[kPaintTraverseIndex] == nullptr) {
