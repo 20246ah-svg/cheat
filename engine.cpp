@@ -8,6 +8,9 @@
 
 #include "engine.h"
 
+#include <cstdio>
+#include <cstring>
+
 namespace Engine {
 IVEngineClient* client_engine = nullptr;
 IBaseClientDLL* client = nullptr;
@@ -20,6 +23,8 @@ std::uintptr_t engine_base = 0;
 
 namespace {
 using CreateInterfaceFn = void*(__cdecl*)(const char*, int*);
+
+char g_initialization_status[512] = "Initialization has not started.";
 
 template <typename Interface>
 [[nodiscard]] Interface* CaptureInterface(HMODULE module, const char* name) noexcept {
@@ -35,13 +40,75 @@ template <typename Interface>
 
     return static_cast<Interface*>(factory(name, nullptr));
 }
+
+void ResetStatus(const char* text) noexcept {
+    std::snprintf(g_initialization_status,
+                  sizeof(g_initialization_status),
+                  "%s",
+                  text);
+}
+
+void AppendStatus(const char* text) noexcept {
+    const std::size_t used = std::strlen(g_initialization_status);
+    if (used >= sizeof(g_initialization_status) - 1) {
+        return;
+    }
+
+    std::snprintf(g_initialization_status + used,
+                  sizeof(g_initialization_status) - used,
+                  " %s",
+                  text);
+}
+
+void UpdateModuleStatus(HMODULE engine_module,
+                        HMODULE client_module,
+                        HMODULE vgui2_module,
+                        HMODULE surface_module) noexcept {
+    ResetStatus("Waiting for modules:");
+    if (engine_module == nullptr) {
+        AppendStatus("engine.dll");
+    }
+    if (client_module == nullptr) {
+        AppendStatus("client.dll");
+    }
+    if (vgui2_module == nullptr) {
+        AppendStatus("vgui2.dll");
+    }
+    if (surface_module == nullptr) {
+        AppendStatus("vguimatsurface.dll");
+    }
+}
+
+void UpdateInterfaceStatus() noexcept {
+    if (IsReady()) {
+        if (client == nullptr) {
+            ResetStatus("ESP interfaces are ready. Optional VClient017 is missing.");
+        } else {
+            ResetStatus("All ClientMod interfaces are ready.");
+        }
+        return;
+    }
+
+    ResetStatus("Missing interfaces:");
+    if (client_engine == nullptr) {
+        AppendStatus("VEngineClient013");
+    }
+    if (entity_list == nullptr) {
+        AppendStatus("VClientEntityList003");
+    }
+    if (surface == nullptr) {
+        AppendStatus("VGUI_Surface030");
+    }
+    if (panel == nullptr) {
+        AppendStatus("VGUI_Panel009");
+    }
+    if (client == nullptr) {
+        AppendStatus("(optional VClient017)");
+    }
+}
 } // namespace
 
 bool Initialize() noexcept {
-    if (IsReady()) {
-        return true;
-    }
-
     const HMODULE engine_module = GetModuleHandleA("engine.dll");
     const HMODULE client_module = GetModuleHandleA("client.dll");
     const HMODULE vgui2_module = GetModuleHandleA("vgui2.dll");
@@ -49,34 +116,39 @@ bool Initialize() noexcept {
 
     if (engine_module == nullptr || client_module == nullptr ||
         vgui2_module == nullptr || surface_module == nullptr) {
+        UpdateModuleStatus(
+            engine_module, client_module, vgui2_module, surface_module);
         return false;
     }
 
-    IVEngineClient* const captured_engine =
-        CaptureInterface<IVEngineClient>(engine_module, "VEngineClient013");
-    IBaseClientDLL* const captured_client =
-        CaptureInterface<IBaseClientDLL>(client_module, "VClient017");
-    IClientEntityList* const captured_entity_list =
-        CaptureInterface<IClientEntityList>(client_module, "VClientEntityList003");
-    ISurface* const captured_surface =
-        CaptureInterface<ISurface>(surface_module, "VGUI_Surface030");
-    IPanel* const captured_panel =
-        CaptureInterface<IPanel>(vgui2_module, "VGUI_Panel009");
-
-    if (captured_engine == nullptr || captured_client == nullptr ||
-        captured_entity_list == nullptr || captured_surface == nullptr ||
-        captured_panel == nullptr) {
-        return false;
-    }
-
-    client_engine = captured_engine;
-    client = captured_client;
-    entity_list = captured_entity_list;
-    surface = captured_surface;
-    panel = captured_panel;
-    client_base = reinterpret_cast<std::uintptr_t>(client_module);
     engine_base = reinterpret_cast<std::uintptr_t>(engine_module);
-    return true;
+    client_base = reinterpret_cast<std::uintptr_t>(client_module);
+
+    if (client_engine == nullptr) {
+        client_engine =
+            CaptureInterface<IVEngineClient>(engine_module, "VEngineClient013");
+    }
+    if (client == nullptr) {
+        client = CaptureInterface<IBaseClientDLL>(client_module, "VClient017");
+    }
+    if (entity_list == nullptr) {
+        entity_list = CaptureInterface<IClientEntityList>(
+            client_module, "VClientEntityList003");
+    }
+    if (surface == nullptr) {
+        surface =
+            CaptureInterface<ISurface>(surface_module, "VGUI_Surface030");
+    }
+    if (panel == nullptr) {
+        panel = CaptureInterface<IPanel>(vgui2_module, "VGUI_Panel009");
+    }
+
+    UpdateInterfaceStatus();
+
+    // Rendering diagnostics can run with only IPanel and ISurface. Gameplay
+    // interfaces are checked separately by IsReady(), so one missing interface
+    // no longer prevents the PaintTraverse test from being installed.
+    return IsRenderReady();
 }
 
 void Shutdown() noexcept {
@@ -87,12 +159,20 @@ void Shutdown() noexcept {
     client_engine = nullptr;
     engine_base = 0;
     client_base = 0;
+    ResetStatus("Engine interfaces have been released.");
+}
+
+bool IsRenderReady() noexcept {
+    return surface != nullptr && panel != nullptr;
 }
 
 bool IsReady() noexcept {
-    return client_engine != nullptr && client != nullptr && entity_list != nullptr &&
-           surface != nullptr && panel != nullptr && client_base != 0 &&
-           engine_base != 0;
+    return IsRenderReady() && client_engine != nullptr && entity_list != nullptr &&
+           client_base != 0 && engine_base != 0;
+}
+
+const char* GetInitializationStatus() noexcept {
+    return g_initialization_status;
 }
 
 CBaseEntity* GetLocalPlayer() noexcept {

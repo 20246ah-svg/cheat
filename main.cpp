@@ -9,27 +9,65 @@
 #include "engine.h"
 #include "hooks.h"
 
+#include <cstdio>
+
 static_assert(sizeof(void*) == 4,
               "This DLL targets the 32-bit ClientMod hl2.exe process");
 
 namespace {
 DWORD WINAPI InitializeThread(void*) noexcept {
-    // The DLL can be loaded before all engine modules have completed startup.
-    while (!Engine::Initialize()) {
+    constexpr int kRenderInitializationAttempts = 40;
+    bool render_ready = false;
+
+    // Do not wait forever: a timeout now produces the exact missing module or
+    // interface instead of silently leaving the user without a second dialog.
+    for (int attempt = 0; attempt < kRenderInitializationAttempts; ++attempt) {
+        if (Engine::Initialize()) {
+            render_ready = true;
+            break;
+        }
         Sleep(250);
     }
 
+    if (!render_ready) {
+        OutputDebugStringA("[cheat] Render initialization failed: ");
+        OutputDebugStringA(Engine::GetInitializationStatus());
+        OutputDebugStringA("\n");
+#if defined(CHEAT_DIAGNOSTICS)
+        MessageBoxA(nullptr,
+                    Engine::GetInitializationStatus(),
+                    "cheat diagnostics - initialization failed",
+                    MB_OK | MB_ICONERROR);
+#endif
+        return 0;
+    }
+
     const bool hook_installed = Hooks::Initialize();
-    OutputDebugStringA(hook_installed
-                           ? "[cheat] Interfaces acquired; PaintTraverse hook installed.\n"
-                           : "[cheat] PaintTraverse hook installation failed.\n");
+
+    // Rendering only needs IPanel and ISurface. Give the gameplay interfaces a
+    // short additional window to appear, but never hold back the test square.
+    for (int attempt = 0; attempt < 20 && !Engine::IsReady(); ++attempt) {
+        Sleep(100);
+        (void)Engine::Initialize();
+    }
+
+    char message[768]{};
+    std::snprintf(
+        message,
+        sizeof(message),
+        "%s\n\n%s",
+        hook_installed
+            ? "PaintTraverse hook installed. A red test square should be visible."
+            : "PaintTraverse hook installation failed.",
+        Engine::GetInitializationStatus());
+
+    OutputDebugStringA("[cheat] ");
+    OutputDebugStringA(message);
+    OutputDebugStringA("\n");
 
 #if defined(CHEAT_DIAGNOSTICS)
     MessageBoxA(nullptr,
-                hook_installed
-                    ? "Interfaces acquired and PaintTraverse hook installed.\n"
-                      "A red test square should now be visible."
-                    : "Interfaces were acquired, but the PaintTraverse hook failed.",
+                message,
                 "cheat diagnostics",
                 MB_OK | (hook_installed ? MB_ICONINFORMATION : MB_ICONERROR));
 #endif

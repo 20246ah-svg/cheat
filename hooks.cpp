@@ -142,7 +142,7 @@ void __fastcall HookedPaintTraverse(void* this_pointer,
 } // namespace
 
 bool Initialize() noexcept {
-    if (!Engine::IsReady()) {
+    if (!Engine::IsRenderReady()) {
         return false;
     }
 
