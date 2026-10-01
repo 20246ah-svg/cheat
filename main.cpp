@@ -30,6 +30,7 @@ DWORD WINAPI InitializeThread(void*) noexcept {
     }
 
     if (!render_ready) {
+        Engine::BuildExtendedDiagnostics();
         OutputDebugStringA("[cheat] Render initialization failed: ");
         OutputDebugStringA(Engine::GetInitializationStatus());
         OutputDebugStringA("\n");

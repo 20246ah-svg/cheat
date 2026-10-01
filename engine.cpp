@@ -104,6 +104,26 @@ void AppendStatus(const char* text) noexcept {
                   text);
 }
 
+[[nodiscard]] bool ProbeInterfaceFamily(CreateInterfaceFn factory,
+                                        const char* format,
+                                        int first_version,
+                                        int last_version,
+                                        char* result,
+                                        std::size_t result_size) noexcept {
+    for (int version = last_version; version >= first_version; --version) {
+        char interface_name[64]{};
+        std::snprintf(interface_name,
+                      sizeof(interface_name),
+                      format,
+                      version);
+        if (factory(interface_name, nullptr) != nullptr) {
+            std::snprintf(result, result_size, "%s", interface_name);
+            return true;
+        }
+    }
+    return false;
+}
+
 void UpdateInterfaceStatus() noexcept {
     if (IsReady()) {
         std::snprintf(
@@ -222,6 +242,72 @@ bool IsReady() noexcept {
 
 const char* GetInitializationStatus() noexcept {
     return g_initialization_status;
+}
+
+void BuildExtendedDiagnostics() noexcept {
+    HANDLE const snapshot = CreateToolhelp32Snapshot(
+        TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetCurrentProcessId());
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        ResetStatus("Module snapshot failed; unable to inspect CreateInterface exports.");
+        return;
+    }
+
+    ResetStatus("CreateInterface scan:");
+    bool found_factory = false;
+    bool found_candidate = false;
+
+    MODULEENTRY32 module_entry{};
+    module_entry.dwSize = sizeof(module_entry);
+    if (Module32First(snapshot, &module_entry)) {
+        do {
+            const auto factory = reinterpret_cast<CreateInterfaceFn>(
+                GetProcAddress(module_entry.hModule, "CreateInterface"));
+            if (factory == nullptr) {
+                continue;
+            }
+
+            found_factory = true;
+            char module_name[MAX_PATH]{};
+            StoreModuleName(module_entry.hModule, module_name);
+            AppendStatus(module_name);
+
+            struct Family {
+                const char* format;
+                int first;
+                int last;
+            };
+            constexpr Family families[] = {
+                {"VEngineClient%03d", 1, 30},
+                {"VClient%03d", 1, 30},
+                {"VClientEntityList%03d", 1, 10},
+                {"VGUI_Surface%03d", 1, 40},
+                {"VGUI_Panel%03d", 1, 20},
+            };
+
+            for (const Family& family : families) {
+                char detected[64]{};
+                if (ProbeInterfaceFamily(factory,
+                                         family.format,
+                                         family.first,
+                                         family.last,
+                                         detected,
+                                         sizeof(detected))) {
+                    AppendStatus(detected);
+                    found_candidate = true;
+                }
+            }
+        } while (Module32Next(snapshot, &module_entry));
+    }
+
+    CloseHandle(snapshot);
+
+    if (!found_factory) {
+        ResetStatus(
+            "No loaded module exports CreateInterface. This ClientMod process "
+            "does not expose the standard Source interface API.");
+    } else if (!found_candidate) {
+        AppendStatus("No known Source interface families were returned.");
+    }
 }
 
 CBaseEntity* GetLocalPlayer() noexcept {

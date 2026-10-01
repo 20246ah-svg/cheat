@@ -102,6 +102,7 @@ void Shutdown() noexcept;
 [[nodiscard]] bool IsRenderReady() noexcept;
 [[nodiscard]] bool IsReady() noexcept;
 [[nodiscard]] const char* GetInitializationStatus() noexcept;
+void BuildExtendedDiagnostics() noexcept;
 [[nodiscard]] CBaseEntity* GetLocalPlayer() noexcept;
 [[nodiscard]] CBaseEntity* GetEntityByIndex(int index) noexcept;
 [[nodiscard]] const Matrix4x4* GetViewMatrix() noexcept;
